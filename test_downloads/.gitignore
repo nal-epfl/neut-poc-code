@@ -1,0 +1,4 @@
+# generated files
+./google-cloud-sdk
+./tests_info_dir/*
+./tests_result_dir/*

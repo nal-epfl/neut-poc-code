@@ -1,0 +1,6 @@
+{
+  "ip": "1.2.3.4",
+  "user": "user",
+  "pass": "pass",
+  "path": "background_replay_path_on_client"
+}
