@@ -130,3 +130,9 @@ dmypy.json
 
 # pycharm generated files
 .idea/
+
+# auto-generated files directories
+background_replay/traces/*
+test_downloads/tests_info_dir/*
+test_downloads/tests_result_dir/*
+test_downloads/google-cloud-sdk
