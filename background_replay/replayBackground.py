@@ -3,12 +3,13 @@ by: Zeinab Shmeis (zeinab.shmeis@epfl.ch)
 
 Example:
     python3 replayBackground.py --server --server_ip=0.0.0.0  --protocol=tcp
+    python3 replayBackground.py --kill_server --protocol=tcp
     python3 replayBackground.py --client --trace_file=traces/link_0_trace_5.csv --server_ip=0.0.0.0 --protocol=tcp
     python3 replayBackground.py --multi_clients --traces_dir=./traces --server_ip=0.0.0.0 --protocol=tcp
     python3 replayBackground.py --select_background --in_dir=./dir1 --out_dir=./traces --sample_ratio=0.3 --prefix=link
 """
 
-import random, socket, shutil, os, sched, time, argparse
+import random, socket, shutil, os, sched, time, argparse, subprocess
 import pandas as pd
 import numpy as np
 import paramiko
@@ -32,7 +33,7 @@ def run_udp_server(server_ip='0.0.0.0'):
         data, address = server.recvfrom(4096)
         if address not in client_addresses:
             client_addresses.append(address)
-            print("received new packet from ", address)
+            print("Server received packet from new client: ", address)
         if not data: break
     server.close()
 
@@ -53,6 +54,14 @@ def accept_connection(connection, address):
         data = connection.recv(4096)
         if not data: break
     connection.close()
+
+
+def kill_server(protocol='tcp'):
+    try:
+        output = subprocess.check_output("fuser {}/{} 2>/dev/null".format(SERVER_PORT, protocol), shell=True)
+        os.system('sudo kill -9 {}'.format(int(output)))
+    except Exception as e:
+        print('NO RUNNING SERVER')
 
 
 def run_client(trace_file, server_ip='0.0.0.0', protocol='tcp'):
@@ -116,10 +125,13 @@ if __name__ == '__main__':
     arg_parser.add_argument('--out_dir')
     arg_parser.add_argument('--sample_ratio', default=0.3)
     arg_parser.add_argument('--prefix', default='')
+    arg_parser.add_argument('--kill_server', action='store_true')
     args = arg_parser.parse_args()
 
     if args.server:
         run_server(args.server_ip, args.protocol)
+    elif args.kill_server:
+        kill_server(args.protocol)
     elif args.client:
         run_client(args.trace_file, args.server_ip, args.protocol)
     elif args.multi_clients:

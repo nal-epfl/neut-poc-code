@@ -21,7 +21,7 @@ from helper_methods import *
 import background_replay.replayBackground as backReplay
 import test_downloads.downloadTests as testDownloader
 
-udp_wehe_apps = {"meet", "teams", "skype", "twittervideo", "webex", "whatsapp", "zoom"}
+udp_wehe_apps = {"meet", "teams", "skype", "twittervideo", "webex", "whatsapp", "zoom", "singleskype", "probeskype"}
 tcp_wehe_apps = {
     "youtube", "netflix", "twitch", "hulu", "spotify", "disneyplus", "facebookvideo", "dailymotion", "deezer",
     "nbcsports", "molotovtv", "mycanal", "ocs", "amazon", "salto", "sfrplay", "vimeo"
@@ -120,10 +120,10 @@ def enable_policing(interface, target_srcs, rate, burst, limit=15000, ifb='ifb0'
     print('Policing is now enabled. Do not forget to --reset_tc when you are done.')
 
 
-def start_background_server(interface):
+def start_background_server(interface, protocol='tcp'):
     server_ip = get_ip(interface)
     print('Start background server with ip={}'.format(server_ip))
-    backReplay.run_server(server_ip=server_ip)
+    backReplay.run_server(server_ip=server_ip, protocol=protocol)
 
 
 def run_wehe_test(wehe_app):
@@ -139,8 +139,11 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
     if with_policing:
         enable_policing(interface=interface, target_srcs=senders, rate=rate, burst=burst, limit=limit)
 
+    # find application protocol
+    app_protocol = 'tcp' if wehe_app in tcp_wehe_apps else 'udp'
+
     # start background server
-    back_process = Process(target=start_background_server, kwargs={'interface': interface})
+    back_process = Process(target=start_background_server, kwargs={'interface': interface, 'protocol': app_protocol})
     back_process.start()
     print('Background server is running.')
     print('Do not forget to start the background client replays. Wehe CLI test will start in 1 min.')
@@ -148,8 +151,8 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
     # start background client on the remote machine
     with open(os.path.join(BACKGROUND_REPLAY_DIR, 'client_info.json'), 'r') as f:
         client_info = json.load(f)
-        command = ('cd {} && ''python3 replayBackground.py --multi_clients --traces_dir=./{} --server_ip={}'.format(
-            client_info['path'], background_dir, get_ip(interface)
+        command = ('cd {} && python3 replayBackground.py --multi_clients --traces_dir=./{} --server_ip={} --protocol={}'.format(
+            client_info['path'], background_dir, get_ip(interface), app_protocol
         ))
         execute_remote_command(client_info['ip'], client_info['user'], client_info['pass'], command)
 
@@ -189,6 +192,7 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
 
         # clean everything
         back_process.kill()
+        backReplay.kill_server(app_protocol)
         reset_tc(interface=interface)
 
 
