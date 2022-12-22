@@ -2,9 +2,9 @@
 by: Zeinab Shmeis (zeinab.shmeis@epfl.ch)
 
 Example:
-    python3 replayBackground.py --server --server_ip=0.0.0.0
-    python3 replayBackground.py --client --trace_file=traces/link_0_trace_5.csv --server_ip=0.0.0.0
-    python3 replayBackground.py --multi_clients --traces_dir=./traces --server_ip=0.0.0.0
+    python3 replayBackground.py --server --server_ip=0.0.0.0  --protocol=tcp
+    python3 replayBackground.py --client --trace_file=traces/link_0_trace_5.csv --server_ip=0.0.0.0 --protocol=tcp
+    python3 replayBackground.py --multi_clients --traces_dir=./traces --server_ip=0.0.0.0 --protocol=tcp
     python3 replayBackground.py --select_background --in_dir=./dir1 --out_dir=./traces --sample_ratio=0.3 --prefix=link
 """
 
@@ -17,8 +17,28 @@ from multiprocessing import Process
 SERVER_PORT = 1234
 
 
-def run_server(server_ip='0.0.0.0'):
-    print('Start a server')
+def run_server(server_ip='0.0.0.0', protocol='tcp'):
+    if protocol == 'tcp': run_tcp_server(server_ip)
+    run_udp_server(server_ip)
+
+
+def run_udp_server(server_ip='0.0.0.0'):
+    print('Start a UDP server')
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind((server_ip, SERVER_PORT))
+
+    client_addresses = []
+    while (True):
+        data, address = server.recvfrom(4096)
+        if address not in client_addresses:
+            client_addresses.append(address)
+            print("received new packet from ", address)
+        if not data: break
+    server.close()
+
+
+def run_tcp_server(server_ip='0.0.0.0'):
+    print('Start a TCP server')
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((server_ip, SERVER_PORT))
     server.listen(10000)
@@ -35,7 +55,7 @@ def accept_connection(connection, address):
     connection.close()
 
 
-def run_client(trace_file, server_ip='0.0.0.0'):
+def run_client(trace_file, server_ip='0.0.0.0', protocol='tcp'):
     if not ('.csv' in trace_file):
         print('trace must be a .csv file')
         return
@@ -45,7 +65,7 @@ def run_client(trace_file, server_ip='0.0.0.0'):
     time.sleep(df['time'].values[0])
     print('Start a client running trace {}'.format(trace_file))
 
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM if protocol == 'tcp' else socket.SOCK_DGRAM)
     client_socket.connect((server_ip, SERVER_PORT))
 
     send_scheduler = sched.scheduler(time.time, time.sleep)
@@ -56,13 +76,13 @@ def run_client(trace_file, server_ip='0.0.0.0'):
     client_socket.close()
 
 
-def run_multi_clients(traces_dir, server_ip='0.0.0.0'):
+def run_multi_clients(traces_dir, server_ip='0.0.0.0', protocol='tcp'):
     processes = []
     for trace_name in os.listdir(traces_dir):
         try:
-            processes.append(Process(
-                target=run_client, kwargs={'trace_file': '{}/{}'.format(traces_dir, trace_name), 'server_ip': server_ip}
-            ))
+            processes.append(Process(target=run_client, kwargs={
+                'trace_file': '{}/{}'.format(traces_dir, trace_name), 'server_ip': server_ip, 'protocol': protocol
+            }))
         except Exception as e:
             print('Failed to run client for trace {}: {}'.format(trace_name, e))
 
@@ -85,6 +105,7 @@ if __name__ == '__main__':
 
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument('--server', action='store_true')
+    arg_parser.add_argument('--protocol', default='tcp')
     arg_parser.add_argument('--client', action='store_true')
     arg_parser.add_argument('--multi_clients', action='store_true')
     arg_parser.add_argument('--select_background', action='store_true')
@@ -98,10 +119,10 @@ if __name__ == '__main__':
     args = arg_parser.parse_args()
 
     if args.server:
-        run_server(args.server_ip)
+        run_server(args.server_ip, args.protocol)
     elif args.client:
-        run_client(args.trace_file, args.server_ip)
+        run_client(args.trace_file, args.server_ip, args.protocol)
     elif args.multi_clients:
-        run_multi_clients(args.traces_dir, args.server_ip)
+        run_multi_clients(args.traces_dir, args.server_ip, args.protocol)
     elif args.select_background:
         select_background(args.in_dir, args.out_dir, args.prefix, float(args.sample_ratio))
