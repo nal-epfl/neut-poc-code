@@ -106,16 +106,16 @@ def enable_policing(interface, target_srcs, rate, burst, limit=15000, ifb='ifb0'
     os.system('sudo tc qdisc add dev {} handle ffff: ingress'.format(interface))
     for i, src in enumerate(target_srcs):
         os.system(
-            'sudo tc filter add dev {} parent ffff: protocol all u32 '
+            'sudo tc filter add dev {} parent ffff: protocol all pref 99 u32 '
             'match ip{} src {} '
-            'action mirred egress redirect dev {} '
-            'action drop '.format(interface, '6' if is_ipv6(src) else '', src, ifb)
+            'action mirred egress redirect index 100 dev {} '
+            'action drop'.format(interface, '6' if is_ipv6(src) else '', src, ifb)
         )
 
     os.system('sudo tc qdisc add dev {} root handle 1: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, limit))
 
-    # os.system('sudo tc qdisc add dev {} root handle 1: netem delay 34ms limit 30'.format(ifb))
-    # os.system('sudo tc qdisc add dev {} parent 1:1 handle 10: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, limit))
+    # os.system('sudo tc qdisc add dev {} root handle 1: netem delay 34ms limit {}'.format(ifb, limit))
+    # os.system('sudo tc qdisc add dev {} parent 1:1 handle 10: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, 7500))
 
     print('Policing is now enabled. Do not forget to --reset_tc when you are done.')
 
@@ -151,7 +151,7 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
     # start background client on the remote machine
     with open(os.path.join(BACKGROUND_REPLAY_DIR, 'client_info.json'), 'r') as f:
         client_info = json.load(f)
-        command = ('cd {} && python3 replayBackground.py --multi_clients --traces_dir=./{} --server_ip={} --protocol={}'.format(
+        command = ('ulimit -n 1048576 && cd {} && python3 replayBackground.py --multi_clients --traces_dir=./{} --server_ip={} --protocol={}'.format(
             client_info['path'], background_dir, get_ip(interface), app_protocol
         ))
         execute_remote_command(client_info['ip'], client_info['user'], client_info['pass'], command)
@@ -187,7 +187,7 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
         print('failed to record policer configuration because of: ', e)
     finally:
         # stop the client at the server
-        command = 'kill -9 $(ps ax | grep \'replayBackground.py --multi_clients\' | awk \'{print $1}\')'
+        command = 'kill -9 $(ps ax | grep \'replayBackground.py\' | awk \'{print $1}\')'
         execute_remote_command(client_info['ip'], client_info['user'], client_info['pass'], command)
 
         # clean everything

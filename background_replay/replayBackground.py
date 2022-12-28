@@ -28,12 +28,13 @@ def run_udp_server(server_ip='0.0.0.0'):
     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     server.bind((server_ip, SERVER_PORT))
 
-    client_addresses = []
+    client_addresses, client_count = [], 0
     while (True):
         data, address = server.recvfrom(4096)
         if address not in client_addresses:
             client_addresses.append(address)
-            print("Server received packet from new client: ", address)
+            client_count = client_count + 1
+            print("Server received packet from new client: ({}, {}, {})".format(client_count, *address))
         if not data: break
     server.close()
 
