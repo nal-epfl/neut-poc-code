@@ -1,5 +1,5 @@
 # generated files
-./traces/
+*trace*/
 
 # private info
 client_info.json
