@@ -10,10 +10,11 @@ Example:
 Note:
     the rule of thumb to set the burst = rate(mbit) * rtt(sec) * 125000
 """
+import multiprocessing
 
 import numpy as np
-import argparse, requests, os, socket, netifaces, time, subprocess
-import re, json
+import argparse, requests, os, socket, time
+import re, json, itertools
 from multiprocessing import Process
 
 from IOPaths import *
@@ -21,26 +22,13 @@ from helper_methods import *
 import background_replay.replayBackground as backReplay
 import test_downloads.downloadTests as testDownloader
 
-udp_wehe_apps = {"meet", "teams", "skype", "twittervideo", "webex", "whatsapp", "zoom", "singleskype", "probeskype"}
+udp_wehe_apps = {"meet", "teams", "skype", "twittervideo", "webex", "whatsapp", "zoom"}
 tcp_wehe_apps = {
     "youtube", "netflix", "twitch", "hulu", "spotify", "disneyplus", "facebookvideo", "dailymotion", "deezer",
     "nbcsports", "molotovtv", "mycanal", "ocs", "amazon", "salto", "sfrplay", "vimeo"
 }
-wehe_apps = {"skype"}
-
-
-# as present in the Wehe server source code
-def get_anonymizedIP(ip):
-    if "." in ip:
-        v4ExceptLast = ip.rsplit('.', 1)[0]
-        anonymizedIP = v4ExceptLast + '.0'
-    elif ":" in ip:
-        v6ExceptLast = ip.rsplit(':', 1)[0]
-        anonymizedIP = v6ExceptLast + ':0000'
-    else:
-        anonymizedIP = ip
-
-    return anonymizedIP
+wehe_apps = {"youtube", "amazon", "nbcsports", "netflix", "facebookvideo"}
+wehe_ports = ['443', '3480', '8801', '9000', '19305', '3478', '49882']
 
 
 def get_nearest_mlab_servers():
@@ -82,8 +70,9 @@ def get_background_server():
         return '{}/32'.format(json.load(f)['ip'])
 
 
-def get_ip(interface):
-    return netifaces.ifaddresses(interface)[netifaces.AF_INET][0]['addr']
+def get_remote_back_credentials():
+    with open(os.path.join(BACKGROUND_REPLAY_DIR, 'client_info.json'), 'r') as f:
+        return json.load(f)
 
 
 def reset_tc(interface, ifb='ifb0'):
@@ -112,10 +101,10 @@ def enable_policing(interface, target_srcs, rate, burst, limit=15000, ifb='ifb0'
             'action drop'.format(interface, '6' if is_ipv6(src) else '', src, ifb)
         )
 
-    os.system('sudo tc qdisc add dev {} root handle 1: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, limit))
+    # os.system('sudo tc qdisc add dev {} root handle 1: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, limit))
 
-    # os.system('sudo tc qdisc add dev {} root handle 1: netem delay 34ms limit {}'.format(ifb, limit))
-    # os.system('sudo tc qdisc add dev {} parent 1:1 handle 10: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, 7500))
+    os.system('sudo tc qdisc add dev {} root handle 1: netem delay 34ms limit {}'.format(ifb, max(limit, 30*1500)))
+    os.system('sudo tc qdisc add dev {} parent 1:1 handle 10: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, 7500))
 
     print('Policing is now enabled. Do not forget to --reset_tc when you are done.')
 
@@ -124,6 +113,19 @@ def start_background_server(interface, protocol='tcp'):
     server_ip = get_ip(interface)
     print('Start background server with ip={}'.format(server_ip))
     backReplay.run_server(server_ip=server_ip, protocol=protocol)
+
+
+def flush_replay_background():
+    # kill any background process if exists
+    for process in multiprocessing.active_children(): process.kill()
+
+    # kill background server on this machine if it exists
+    backReplay.kill_server()
+
+    # kill all clients on the remote machine
+    back_client_info = get_remote_back_credentials()
+    command = 'kill -9 $(ps ax | grep \'replayBackground.py\' | awk \'{print $1}\')'
+    execute_remote_command(back_client_info['ip'], back_client_info['user'], back_client_info['pass'], command)
 
 
 def run_wehe_test(wehe_app):
@@ -142,6 +144,12 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
     # find application protocol
     app_protocol = 'tcp' if wehe_app in tcp_wehe_apps else 'udp'
 
+    # load the background server info
+    back_client_info = get_remote_back_credentials()
+
+    # reset background server and client
+    flush_replay_background()
+
     # start background server
     back_process = Process(target=start_background_server, kwargs={'interface': interface, 'protocol': app_protocol})
     back_process.start()
@@ -149,25 +157,31 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
     print('Do not forget to start the background client replays. Wehe CLI test will start in 1 min.')
 
     # start background client on the remote machine
-    with open(os.path.join(BACKGROUND_REPLAY_DIR, 'client_info.json'), 'r') as f:
-        client_info = json.load(f)
-        command = ('ulimit -n 1048576 && cd {} && python3 replayBackground.py --multi_clients --traces_dir=./{} --server_ip={} --protocol={}'.format(
-            client_info['path'], background_dir, get_ip(interface), app_protocol
-        ))
-        execute_remote_command(client_info['ip'], client_info['user'], client_info['pass'], command)
+    command = ('ulimit -n 1048576 && cd {} && python3 replayBackground.py --multi_clients --traces_dir=./{} --server_ip={} --protocol={}'.format(
+        back_client_info['path'], background_dir, get_ip(interface), app_protocol
+    ))
+    execute_remote_command(back_client_info['ip'], back_client_info['user'], back_client_info['pass'], command)
 
     # sleep for warmup
     time.sleep(10)
 
     try:
         # start tcpdump from client side
-        temp_pcap = '{}/results/tcpdump_out.pcap'.format(WEHE_CMDLINE_DIR)
-        command = ['sudo', 'tcpdump', '-w', temp_pcap, '-i', 'ifb0', 'port', '3478', 'or', 'port', '443']
-        tcpdump_p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        tcpdump_p.stderr.readline()
+        if (app_protocol == 'udp') and enable_policing:
+            ifb_temp_pcap = '{}/results/tcpdump_ifb_out.pcap'.format(WEHE_CMDLINE_DIR)
+            ifb_dump = Tcpdump(dump_path=ifb_temp_pcap, interface='ifb0')
+            ifb_dump.start(wehe_ports + ['1234'])
+
+            eth_temp_pcap = '{}/results/tcpdump_eth_out.pcap'.format(WEHE_CMDLINE_DIR)
+            eth_dump = Tcpdump(dump_path=eth_temp_pcap, interface='ifb0')
+            eth_dump.start(wehe_ports + ['1234'])
 
         # start the wehe cli test
         test_info = run_wehe_test(wehe_app=wehe_app)
+
+        # clean everything
+        flush_replay_background()
+        reset_tc(interface=interface)
 
         # save the test information
         test_info['background'] = background_dir
@@ -178,22 +192,20 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
             json.dump(test_info, f)
 
         # stop and copy tcpdump output
-        out_pcap = '{}/dump_{}_{}.pcap'.format(output_dir, test_info['user_id'], test_info['test_id'])
-        os.system('sudo tcprewrite --fixcsum --pnat=[{}]:[{}] --infile={} --outfile={}'.format(
-            get_ip(interface), get_anonymizedIP(get_ip(interface)), temp_pcap, out_pcap
-        ))
-        os.system('sudo rm {}'.format(temp_pcap))
-    except Exception as e:
-        print('failed to record policer configuration because of: ', e)
-    finally:
-        # stop the client at the server
-        command = 'kill -9 $(ps ax | grep \'replayBackground.py\' | awk \'{print $1}\')'
-        execute_remote_command(client_info['ip'], client_info['user'], client_info['pass'], command)
+        if (app_protocol == 'udp') and enable_policing:
+            ifb_out_pcap = '{}/dump_{}_{}.pcap'.format(output_dir, test_info['user_id'], test_info['test_id'])
+            ifb_dump.stop()
+            ifb_dump.clean_pcap(ifb_out_pcap, get_ip(interface))
+            print('done cleaning pcap for ifb interface')
 
-        # clean everything
-        back_process.kill()
-        backReplay.kill_server(app_protocol)
+            eth_out_pcap = '{}/dump_{}_{}_eth.pcap'.format(output_dir, test_info['user_id'], test_info['test_id'])
+            eth_dump.stop()
+            eth_dump.clean_pcap(eth_out_pcap, get_ip(interface))
+            print('done cleaning pcap for eth interface')
+    except Exception as e:
+        flush_replay_background()
         reset_tc(interface=interface)
+        print('failed to record policer configuration because of: ', e)
 
 
 if __name__ == '__main__':
@@ -212,6 +224,7 @@ if __name__ == '__main__':
     arg_parser.add_argument('--limit_as_ratio')
     arg_parser.add_argument('--app')
     arg_parser.add_argument('--background_traces', default='traces')
+    arg_parser.add_argument('--run_exp', action='store_true')
     args = arg_parser.parse_args()
 
     if args.reset_tc:
@@ -225,3 +238,33 @@ if __name__ == '__main__':
         run_proof_of_concept(args.app, args.interface, True, args.rate, burst, limit, args.background_traces)
     elif args.run:
         run_proof_of_concept(args.app, args.interface, True, args.rate, args.burst, args.limit, args.background_traces)
+    elif args.run_exp:
+        # apps and total traffic volume mapping
+        app_volumes = {
+            # 'skype': 28.8, 'probe1skype': 27.4, 'probe2skype': 29,
+            # 'whatsapp': 43.4, 'probewhatsapp': 27,
+            'webex': 27, 'incprobewebex': 27, 'probe2webex': 27,
+            # 'nbcsports': 65, 'netflix': 57, 'facebookvideo': 65
+            # 'nbcsports': 34, 'netflix': 32, 'facebookvideo': 37
+        }
+        burst_period = 0.035
+        rate_ratios, limit_ratios = [1.3, 1.5, 2, 2.5], [0.25, 0.5, 1]
+        nb_runs = 0
+        for back_dir_idx in np.arange(1, 6):
+            for rate_ratio, limit_ratio in itertools.product(rate_ratios, limit_ratios):
+                for app in app_volumes.keys():
+                    rate = int(np.round(app_volumes[app] / rate_ratio))
+                    burst = int(rate * burst_period * 125000)
+                    limit = max(int(burst * float(limit_ratio)), 15000)
+                    nb_runs = nb_runs + 1
+                    print('Run number: ', nb_runs)
+                    try:
+                        run_proof_of_concept(
+                            app, 'eno1', True, '{}mbit'.format(rate), burst, limit, 'skype_back_traces{}'.format(back_dir_idx)
+                        )
+                        time.sleep(60)
+                    except Exception as e:
+                        flush_replay_background()
+                        time.sleep(300)
+                    print('-------------------------------------')
+

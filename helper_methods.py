@@ -1,4 +1,5 @@
-import os, re, requests, paramiko
+import os, re, requests, paramiko, subprocess
+import ipaddress, scapy.all, netifaces
 import pandas as pd
 from bs4 import BeautifulSoup
 
@@ -39,7 +40,83 @@ def extract_table_from_html(url):
 def execute_remote_command(client_ip, client_user, client_password, command):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.load_host_keys(os.path.expanduser('~/.ssh/known_hosts'))
     ssh.connect(client_ip, username=client_user, password=client_password, port=22)
     ssh.exec_command(command)
     return ssh
+
+
+def get_ip(interface):
+    return netifaces.ifaddresses(interface)[netifaces.AF_INET][0]['addr']
+
+
+# as present in the Wehe server source code
+def get_anonymizedIP(ip):
+    ip_address = ipaddress.ip_address(ip)
+
+    if ip_address.version == 4:
+        mask = ipaddress.ip_address('255.255.255.0')  # /24 mask
+        anonymizedIP = str(ipaddress.ip_address(int(ip_address) & int(mask)))
+    elif ip_address.version == 6:
+        mask = ipaddress.ip_address('ffff:ffff:ffff:0000:0000:0000:0000:0000')  # /48
+        anonymizedIP = str(ipaddress.ip_address(int(ip_address) & int(mask)))
+    else:
+        anonymizedIP = ip
+
+    return anonymizedIP
+
+
+class Tcpdump(object):
+
+    def __init__(self, dump_path=None, interface=None):
+        self._interface = interface
+        self._running = False
+        self._p = None
+        self.bufferSize = 131072
+        self.dump_path = dump_path
+
+    def start(self, ports=None):
+        command = ['sudo', 'tcpdump', '-w', self.dump_path]
+
+        if self._interface is not None:
+            command += ['-i', self._interface]
+
+        if ports is not None:
+            for i, port in enumerate(ports):
+                if i > 0: command += ['or']
+                command += ['port', port]
+
+        self._p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        '''
+            Wait for tcpdump process to start listening for traffic by invoking self._p.stderr.readline()
+        '''
+        self._p.stderr.readline()
+        self._running = True
+
+        return ' '.join(command)
+
+    def stop(self):
+        output = ['-1', '-1', '-1']
+        try:
+            self._p.terminate()
+            output = self._p.communicate()
+        except AttributeError:
+            return 'None'
+        self._running = False
+        return output
+
+    def status(self):
+        return self._running
+
+    def clean_pcap(self, target_pcap, ip_to_anonymize):
+        os.system('sudo tcprewrite --fixcsum --pnat=[{}]:[{}] --infile={} --outfile={}'.format(
+            ip_to_anonymize, get_anonymizedIP(ip_to_anonymize), self.dump_path, target_pcap
+        ))
+        # os.system('sudo chown -R $USER:$USER {}'.format(out_pcap))
+        # remove payload data from pcap file
+        pkts = scapy.all.rdpcap(target_pcap)
+        for pkt in pkts:
+            pkt.load = ''
+        scapy.all.wrpcap(target_pcap, pkts)
+        # remove the input pcap file
+        os.system('sudo rm {}'.format(self.dump_path))

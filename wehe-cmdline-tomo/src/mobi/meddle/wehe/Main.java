@@ -16,7 +16,11 @@ public class Main {
           "webex", "whatsapp", "youtube", "zoom", "port80s", "port81s", "port465s", "port853s", "port993s",
           "port995s", "port1194s", "port1701s", "port5061s", "port6881s", "port8080s", "port8443s",
           "port80l", "port81l", "port465l", "port853l", "port993l", "port995l", "port1194l",
-          "port1701l", "port5061l", "port6881l", "port8080l", "port8443l", "singleskype", "probeskype"}; //for -n argument
+          "port1701l", "port5061l", "port6881l", "port8080l", "port8443l",
+          "onewaymeet", "onewayteams", "onewayskype", "onewaywebex", "onewaywhatsapp", "onewayzoom",
+          "probemeet", "probeteams", "probe1skype", "probe2skype", "probewebex", "probewhatsapp", "probezoom",
+          "probe2webex", "incprobewebex",
+  }; //for -n argument
   private static String logLevel = "UI";
 
   /**

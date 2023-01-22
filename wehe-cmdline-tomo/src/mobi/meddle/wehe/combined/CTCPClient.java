@@ -66,6 +66,8 @@ public class CTCPClient {
       Log.i("Client", "Socket is now closed");
     } catch (IOException e) {
       Log.w("Client", "Problem closing TCP socket", e);
+    } catch (NullPointerException e) {
+      Log.w("Client", "Problem socket is Null", e);
     }
   }
 

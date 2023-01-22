@@ -10,7 +10,7 @@ public final class Consts {
   public static final int KS2PVAL_THRESHOLD = 1; //percent
 
   public static final boolean TIMEOUT_ENABLED = true;
-  public static final int REPLAY_APP_TIMEOUT = 120; //in seconds
+  public static final int REPLAY_APP_TIMEOUT = 90; //in seconds
   public static final int REPLAY_PORT_TIMEOUT = 30; //in seconds
 
   //from BuildConfig in android

@@ -9,10 +9,9 @@ Example:
     python3 replayBackground.py --select_background --in_dir=./dir1 --out_dir=./traces --sample_ratio=0.3 --prefix=link
 """
 
-import random, socket, shutil, os, sched, time, argparse, subprocess
+import random, socket, shutil, os, sched, time, argparse
 import pandas as pd
 import numpy as np
-import paramiko
 from multiprocessing import Process
 
 SERVER_PORT = 1234
@@ -57,10 +56,10 @@ def accept_connection(connection, address):
     connection.close()
 
 
-def kill_server(protocol='tcp'):
+def kill_server():
     try:
-        output = subprocess.check_output("fuser {}/{} 2>/dev/null".format(SERVER_PORT, protocol), shell=True)
-        os.system('sudo kill -9 {}'.format(int(output)))
+        if os.system('sudo lsof -t -i:{} > /dev/null 2>&1'.format(SERVER_PORT)) == 0:
+            os.system('sudo kill -9 $(lsof -t -i:{})'.format(SERVER_PORT))
     except Exception as e:
         print('NO RUNNING SERVER')
 

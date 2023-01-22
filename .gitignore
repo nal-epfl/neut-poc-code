@@ -130,3 +130,6 @@ dmypy.json
 
 # pycharm generated files
 .idea/
+
+# results directories
+result*
