@@ -9,7 +9,7 @@ Example:
     python3 replayBackground.py --select_background --in_dir=./dir1 --out_dir=./traces --sample_ratio=0.3 --prefix=link
 """
 
-import random, socket, shutil, os, sched, time, argparse
+import random, socket, shutil, os, sched, time, argparse, paramiko
 import pandas as pd
 import numpy as np
 from multiprocessing import Process
@@ -104,6 +104,34 @@ def run_multi_clients(traces_dir, server_ip='0.0.0.0', protocol='tcp'):
         process.join()
 
 
+def execute_remote_command(client_ip, client_user, key_path, command):
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(client_ip, username=client_user, port=22, key_filename=key_path)
+    ssh.exec_command(command)
+    return ssh
+
+
+class RemoteBackClient:
+
+    def __init__(self, client_info):
+        self.info = client_info
+
+    def start_replay(self, background_dir, server_ip, protocol):
+        command = (
+            'ulimit -n 1048576 && '
+            'cd {} && '
+            'python3 replayBackground.py --multi_clients --traces_dir=./{}{} --server_ip={} --protocol={}'.format(
+                self.info['path'], background_dir, self.info["dirs_suffix"], server_ip, protocol)
+        )
+        # print(command)
+        execute_remote_command(self.info['ip'], self.info['user'], self.info['key_path'], command)
+
+    def kill_all_clients(self):
+        command = 'kill -9 $(ps ax | grep \'replayBackground.py\' | awk \'{print $1}\')'
+        execute_remote_command(self.info['ip'], self.info['user'], self.info['key_path'], command)
+
+
 def select_background(in_dir, out_dir, prefix, sample_ratio=0.3):
     traces_name = os.listdir(in_dir)
     for trace in random.sample(list(traces_name), int(sample_ratio * len(traces_name))):
@@ -131,7 +159,7 @@ if __name__ == '__main__':
     if args.server:
         run_server(args.server_ip, args.protocol)
     elif args.kill_server:
-        kill_server(args.protocol)
+        kill_server()
     elif args.client:
         run_client(args.trace_file, args.server_ip, args.protocol)
     elif args.multi_clients:

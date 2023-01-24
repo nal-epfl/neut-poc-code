@@ -65,14 +65,15 @@ def get_epfl_servers():
         return ['{}/32'.format(ip.rstrip('\n')) for ip in f.readlines()]
 
 
-def get_background_server():
-    with open(os.path.join(BACKGROUND_REPLAY_DIR, 'client_info.json'), 'r') as f:
-        return '{}/32'.format(json.load(f)['ip'])
+def get_background_server(server_name):
+    with open(os.path.join(BACKGROUND_REPLAY_DIR, 'background_replay/clients_info.json'), 'r') as f:
+        return '{}/32'.format(json.load(f)[server_name]['ip'])
 
 
-def get_remote_back_credentials():
-    with open(os.path.join(BACKGROUND_REPLAY_DIR, 'client_info.json'), 'r') as f:
-        return json.load(f)
+def get_back_clients(servers_names):
+    with open(os.path.join(BACKGROUND_REPLAY_DIR, 'clients_info.json'), 'r') as f:
+        clients_info = json.load(f)
+        return [backReplay.RemoteBackClient(clients_info[s]) for s in servers_names]
 
 
 def reset_tc(interface, ifb='ifb0'):
@@ -101,10 +102,10 @@ def enable_policing(interface, target_srcs, rate, burst, limit=15000, ifb='ifb0'
             'action drop'.format(interface, '6' if is_ipv6(src) else '', src, ifb)
         )
 
-    # os.system('sudo tc qdisc add dev {} root handle 1: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, limit))
+    os.system('sudo tc qdisc add dev {} root handle 1: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, limit))
 
-    os.system('sudo tc qdisc add dev {} root handle 1: netem delay 34ms limit {}'.format(ifb, max(limit, 30*1500)))
-    os.system('sudo tc qdisc add dev {} parent 1:1 handle 10: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, 7500))
+    # os.system('sudo tc qdisc add dev {} root handle 1: netem delay 12ms limit {}'.format(ifb, max(limit, 10*1500)))
+    # os.system('sudo tc qdisc add dev {} parent 1:1 handle 10: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, 7500))
 
     print('Policing is now enabled. Do not forget to --reset_tc when you are done.')
 
@@ -115,7 +116,7 @@ def start_background_server(interface, protocol='tcp'):
     backReplay.run_server(server_ip=server_ip, protocol=protocol)
 
 
-def flush_replay_background():
+def flush_replay_background(back_servers):
     # kill any background process if exists
     for process in multiprocessing.active_children(): process.kill()
 
@@ -123,32 +124,28 @@ def flush_replay_background():
     backReplay.kill_server()
 
     # kill all clients on the remote machine
-    back_client_info = get_remote_back_credentials()
-    command = 'kill -9 $(ps ax | grep \'replayBackground.py\' | awk \'{print $1}\')'
-    execute_remote_command(back_client_info['ip'], back_client_info['user'], back_client_info['pass'], command)
+    for back_server in back_servers:
+        back_server.kill_all_clients()
 
 
 def run_wehe_test(wehe_app):
     os.chdir(WEHE_CMDLINE_DIR)
-    os.system('java -jar wehe-cmdline.jar -s epfl -n {} -c -r results/ -l info -u 2'.format(wehe_app))
+    os.system('java -jar wehe-cmdline.jar -n {} -c -r results/ -l info -u 2'.format(wehe_app))
     os.chdir('..')
     return testDownloader.get_run_test_info('{}/results'.format(WEHE_CMDLINE_DIR))
 
 
-def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit, background_dir='traces'):
+def run_proof_of_concept(wehe_app, wehe_servers, interface, with_policing, rate, burst, limit, back_clients, background_dir='traces'):
     # enable policing
-    senders = np.concatenate([[get_background_server()], get_epfl_servers()]) # list(get_all_mlab_servers().values())])
+    senders = np.concatenate([[b.info['ip'] for b in back_clients], wehe_servers])
     if with_policing:
         enable_policing(interface=interface, target_srcs=senders, rate=rate, burst=burst, limit=limit)
 
     # find application protocol
     app_protocol = 'tcp' if wehe_app in tcp_wehe_apps else 'udp'
 
-    # load the background server info
-    back_client_info = get_remote_back_credentials()
-
     # reset background server and client
-    flush_replay_background()
+    flush_replay_background(back_clients)
 
     # start background server
     back_process = Process(target=start_background_server, kwargs={'interface': interface, 'protocol': app_protocol})
@@ -157,10 +154,8 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
     print('Do not forget to start the background client replays. Wehe CLI test will start in 1 min.')
 
     # start background client on the remote machine
-    command = ('ulimit -n 1048576 && cd {} && python3 replayBackground.py --multi_clients --traces_dir=./{} --server_ip={} --protocol={}'.format(
-        back_client_info['path'], background_dir, get_ip(interface), app_protocol
-    ))
-    execute_remote_command(back_client_info['ip'], back_client_info['user'], back_client_info['pass'], command)
+    for back_client in back_clients:
+        back_client.start_replay(background_dir, get_ip(interface), app_protocol)
 
     # sleep for warmup
     time.sleep(10)
@@ -168,19 +163,15 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
     try:
         # start tcpdump from client side
         if (app_protocol == 'udp') and enable_policing:
-            ifb_temp_pcap = '{}/results/tcpdump_ifb_out.pcap'.format(WEHE_CMDLINE_DIR)
+            ifb_temp_pcap = '{}/results/tcpdump_out.pcap'.format(WEHE_CMDLINE_DIR)
             ifb_dump = Tcpdump(dump_path=ifb_temp_pcap, interface='ifb0')
-            ifb_dump.start(wehe_ports + ['1234'])
-
-            eth_temp_pcap = '{}/results/tcpdump_eth_out.pcap'.format(WEHE_CMDLINE_DIR)
-            eth_dump = Tcpdump(dump_path=eth_temp_pcap, interface='ifb0')
-            eth_dump.start(wehe_ports + ['1234'])
+            ifb_dump.start(wehe_ports)
 
         # start the wehe cli test
         test_info = run_wehe_test(wehe_app=wehe_app)
 
         # clean everything
-        flush_replay_background()
+        flush_replay_background(back_clients)
         reset_tc(interface=interface)
 
         # save the test information
@@ -198,12 +189,8 @@ def run_proof_of_concept(wehe_app, interface, with_policing, rate, burst, limit,
             ifb_dump.clean_pcap(ifb_out_pcap, get_ip(interface))
             print('done cleaning pcap for ifb interface')
 
-            eth_out_pcap = '{}/dump_{}_{}_eth.pcap'.format(output_dir, test_info['user_id'], test_info['test_id'])
-            eth_dump.stop()
-            eth_dump.clean_pcap(eth_out_pcap, get_ip(interface))
-            print('done cleaning pcap for eth interface')
     except Exception as e:
-        flush_replay_background()
+        flush_replay_background(back_clients)
         reset_tc(interface=interface)
         print('failed to record policer configuration because of: ', e)
 
@@ -232,39 +219,48 @@ if __name__ == '__main__':
     elif args.enable_policing:
         enable_policing(args.interface, args.target_srcs, args.rate, args.burst, args.limit, args.ifb)
     elif args.run & args.auto_config:
-        rate = float(re.findall("\d+\.?\d+", args.rate)[0])
-        burst = int(rate * (20 * 1e-3) * 125000)
-        limit = int(burst * float(args.limit_as_ratio))
-        run_proof_of_concept(args.app, args.interface, True, args.rate, burst, limit, args.background_traces)
+        m_rate = float(re.findall("\d+\.?\d+", args.rate)[0])
+        m_burst = int(m_rate * (20 * 1e-3) * 125000)
+        m_limit = int(m_burst * float(args.limit_as_ratio))
+        run_proof_of_concept(args.app, args.interface, True, args.rate, m_burst, m_limit, args.background_traces)
     elif args.run:
         run_proof_of_concept(args.app, args.interface, True, args.rate, args.burst, args.limit, args.background_traces)
     elif args.run_exp:
+        # define which servers will execute background
+        m_back_clients = get_back_clients(['icnals17'])
+        m_wehe_servers = get_all_mlab_servers().values() # get_epfl_servers()
+
         # apps and total traffic volume mapping
-        app_volumes = {
+        m_app_volumes = {
             # 'skype': 28.8, 'probe1skype': 27.4, 'probe2skype': 29,
             # 'whatsapp': 43.4, 'probewhatsapp': 27,
-            'webex': 27, 'incprobewebex': 27, 'probe2webex': 27,
+            'webex': 27, 'probe2webex': 27, 'incprobewebex': 27,
             # 'nbcsports': 65, 'netflix': 57, 'facebookvideo': 65
             # 'nbcsports': 34, 'netflix': 32, 'facebookvideo': 37
         }
-        burst_period = 0.035
-        rate_ratios, limit_ratios = [1.3, 1.5, 2, 2.5], [0.25, 0.5, 1]
+        m_burst_period = 0.035
+        m_rate_ratios, m_limit_ratios = [1.3, 1.5, 2, 2.5], [0.25, 0.5, 1]
         nb_runs = 0
-        for back_dir_idx in np.arange(1, 6):
-            for rate_ratio, limit_ratio in itertools.product(rate_ratios, limit_ratios):
-                for app in app_volumes.keys():
-                    rate = int(np.round(app_volumes[app] / rate_ratio))
-                    burst = int(rate * burst_period * 125000)
-                    limit = max(int(burst * float(limit_ratio)), 15000)
+        for m_back_dir_idx in np.arange(1, 6):
+            for m_rate_ratio, m_limit_ratio in itertools.product(m_rate_ratios, m_limit_ratios):
+                for m_app in m_app_volumes.keys():
+                    m_rate = int(np.round(m_app_volumes[m_app] / m_rate_ratio))
+                    m_burst = int(m_rate * m_burst_period * 125000)
+                    m_limit = max(int(m_burst * float(m_limit_ratio)), 15000)
                     nb_runs = nb_runs + 1
                     print('Run number: ', nb_runs)
+                    print(m_app, m_rate_ratio, m_rate, m_limit_ratio)
                     try:
                         run_proof_of_concept(
-                            app, 'eno1', True, '{}mbit'.format(rate), burst, limit, 'skype_back_traces{}'.format(back_dir_idx)
+                            m_app, m_wehe_servers, 'eno1',
+                            True, '{}mbit'.format(m_rate), m_burst, m_limit,
+                            m_back_clients, 'skype_back_traces{}'.format(m_back_dir_idx)
                         )
+                        print('-------------------------------------')
                         time.sleep(60)
                     except Exception as e:
-                        flush_replay_background()
+                        flush_replay_background(m_back_clients)
+                        print('-------------------------------------')
                         time.sleep(300)
-                    print('-------------------------------------')
+
 

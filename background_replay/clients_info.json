@@ -1,0 +1,29 @@
+{
+  "icnals17": {
+    "server_name": "icnals17",
+    "ip": "",
+    "user": "",
+    "pass": "",
+    "key_path": "",
+    "path": "",
+    "dirs_suffix": ""
+  },
+  "icnals18": {
+    "server_name": "icnals18",
+    "ip": "",
+    "user": "",
+    "pass": "",
+    "key_path": "",
+    "path": "",
+    "dirs_suffix": ""
+  },
+  "icnals19": {
+    "server_name": "icnals19",
+    "ip": "",
+    "user": "",
+    "pass": "",
+    "key_path": "",
+    "path": "",
+    "dirs_suffix": ""
+  }
+}

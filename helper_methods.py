@@ -37,10 +37,10 @@ def extract_table_from_html(url):
     return pd.DataFrame(table_data, columns=table_header)
 
 
-def execute_remote_command(client_ip, client_user, client_password, command):
+def execute_remote_command(client_ip, client_user, key_path, command):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(client_ip, username=client_user, password=client_password, port=22)
+    ssh.connect(client_ip, username=client_user, port=22, key_filename=key_path)
     ssh.exec_command(command)
     return ssh
 
