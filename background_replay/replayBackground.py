@@ -60,6 +60,7 @@ def kill_server():
     try:
         if os.system('sudo lsof -t -i:{} > /dev/null 2>&1'.format(SERVER_PORT)) == 0:
             os.system('sudo kill -9 $(lsof -t -i:{})'.format(SERVER_PORT))
+        time.sleep(10) # wait for tcp to close all the connections
     except Exception as e:
         print('NO RUNNING SERVER')
 

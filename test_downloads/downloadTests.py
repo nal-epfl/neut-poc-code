@@ -9,6 +9,8 @@ Example:
 """
 
 import os, shutil, json, re, argparse
+from datetime import datetime, timedelta
+
 from IOPaths import *
 
 
@@ -77,7 +79,7 @@ def find_test_files_per_server(user_id, test_id, server, date, output_dir):
                         wehe_test.copy_to(dst_dir)
             except Exception as e:
                 print(e)
-            shutil.rmtree('{}/2022'.format(temp_dir))
+            shutil.rmtree('{}/{}'.format(temp_dir, date.split('/')[0]))
             
     shutil.rmtree(temp_dir)
 
@@ -87,8 +89,13 @@ def download_test_files(test_info_file, output_dir):
     with open(test_info_file) as json_file: info = json.load(json_file)
     date, user_id, test_id = info['date'], info['user_id'], info['test_id']
     result_dir = '{}/{}/{}_{}'.format(output_dir, date.replace('/', '-'), user_id, test_id)
-    find_test_files_per_server(user_id, test_id, info['servers'][0], date, result_dir)
-    find_test_files_per_server(user_id, test_id, info['servers'][1], date, result_dir)
+
+    # look into data of: previous day, same day, and next day
+    for day_shift in [-1, 0, 1]:
+        the_date = str(datetime.strptime(date, '%Y/%m/%d').date() + timedelta(days=day_shift)).replace('-', '/')
+        find_test_files_per_server(user_id, test_id, info['servers'][0], the_date, result_dir)
+        find_test_files_per_server(user_id, test_id, info['servers'][1], the_date, result_dir)
+
     shutil.copy(test_info_file, result_dir)
     
 
@@ -116,8 +123,13 @@ def get_run_test_info(test_result_dir):
         with open('{}/info.txt'.format(test_result_dir), 'r') as f:
             user_id, test_id = [val.rstrip('\n') for val in f.readlines()]
 
+        log_file = ''
+        for log_name in os.listdir(os.path.join(test_result_dir, 'logs')):
+            if '{}_{}'.format(user_id, test_id) in log_name:
+                log_file = os.path.join(test_result_dir, 'logs', log_name)
+
         servers = []
-        with open('{}/logs/logs_{}_{}_0.txt'.format(test_result_dir, user_id, test_id)) as f:
+        with open(log_file) as f:
             lines = f.readlines()
             date, time = lines[0].split(' ')[0:2]
             for line in lines:
