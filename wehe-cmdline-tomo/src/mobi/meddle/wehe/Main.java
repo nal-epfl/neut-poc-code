@@ -18,8 +18,8 @@ public class Main {
           "port80l", "port81l", "port465l", "port853l", "port993l", "port995l", "port1194l",
           "port1701l", "port5061l", "port6881l", "port8080l", "port8443l",
           "onewaymeet", "onewayteams", "onewayskype", "onewaywebex", "onewaywhatsapp", "onewayzoom",
-          "probemeet", "probeteams", "probe1skype", "probe2skype", "probewebex", "probewhatsapp", "probezoom",
-          "probe2webex", "incprobewebex",
+          "probemeet", "probeteams", "probe1skype", "probewebex", "probewhatsapp", "probezoom",
+          "probe2webex", "incprobewebex", "probe2skype", "incprobeskype", "probe2whatsapp"
   }; //for -n argument
   private static String logLevel = "UI";
 

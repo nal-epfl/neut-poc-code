@@ -226,6 +226,15 @@
       "category": "CONFERENCING"
     },
     {
+      "name": "Inc Probe Skype",
+      "size": 14,
+      "time": 40,
+      "image": "incprobeskype",
+      "datafile": "IncProbeSkype_12122018.pcap_client_all.json",
+      "randomdatafile": "IncProbeSkypeRandom_12122018.pcap_client_all.json",
+      "category": "CONFERENCING"
+    },
+    {
       "name": "Spotify",
       "size": 8,
       "time": 15,
@@ -331,6 +340,15 @@
       "image": "probewhatsapp",
       "datafile": "ProbeL0d007WhatsApp_04112019.pcap_client_all.json",
       "randomdatafile": "ProbeL0d007WhatsAppRandom_04112019.pcap_client_all.json",
+      "category": "CONFERENCING"
+    },
+    {
+      "name": "Probe2 WhatsApp",
+      "size": 7,
+      "time": 29,
+      "image": "probe2whatsapp",
+      "datafile": "ProbeL0d008WhatsApp_04112019.pcap_client_all.json",
+      "randomdatafile": "ProbeL0d008WhatsAppRandom_04112019.pcap_client_all.json",
       "category": "CONFERENCING"
     },
     {

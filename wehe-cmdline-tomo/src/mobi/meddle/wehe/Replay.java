@@ -900,7 +900,7 @@ public class Replay {
      * Step A: Flip a coin to decide which replay type to run first.
      */
     //"random" test for ports is port 443
-    if (Math.random() < 0.5) {
+    if (Math.random() < 0) { //0.5) {
       types = new String[]{"open", "random"};
     } else {
       types = new String[]{"random", "open"};
