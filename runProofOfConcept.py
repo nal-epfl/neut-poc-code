@@ -18,17 +18,34 @@ import re, json, itertools
 from multiprocessing import Process
 
 from IOPaths import *
-from helper_methods import *
+from td_module import *
 import background_replay.replayBackground as backReplay
 import test_downloads.downloadTests as testDownloader
 
-udp_wehe_apps = {"meet", "teams", "skype", "twittervideo", "webex", "whatsapp", "zoom"}
+udp_wehe_apps = {'meet', 'teams', 'skype', 'twittervideo', 'webex', 'whatsapp', 'zoom'}
 tcp_wehe_apps = {
-    "youtube", "netflix", "twitch", "hulu", "spotify", "disneyplus", "facebookvideo", "dailymotion", "deezer",
-    "nbcsports", "molotovtv", "mycanal", "ocs", "amazon", "salto", "sfrplay", "vimeo"
+    'youtube', 'netflix', 'twitch', 'hulu', 'spotify', 'disneyplus', 'facebookvideo', 'dailymotion', 'deezer',
+    'nbcsports', 'molotovtv', 'mycanal', 'ocs', 'amazon', 'salto', 'sfrplay', 'vimeo'
 }
-wehe_apps = {"youtube", "amazon", "nbcsports", "netflix", "facebookvideo"}
 wehe_ports = ['443', '3480', '8801', '9000', '19305', '3478', '49882']
+
+app_volumes = {
+    'meet': 1, 'probemeet': 1,
+    'webex': 2, 'probewebex': 2, 'probe2webex': 2, 'incprobewebex': 2,
+    'zoom': 2.5, 'probezoom': 2.5,
+    'whatsapp': 4, 'probewhatsapp': 4,
+    'teams': 2, 'probeteams': 2,
+    'skype': 3, 'probe1skype': 3, 'probe2skype': 3, 'incprobeskype': 3,
+
+    'youtube': 25, 'nbcsports': 25, 'netflix': 25, 'facebookvideo': 25, 'amazon': 25
+}
+back_volume_by_pct = {
+    '0.25': 25, '0.5': 55, '0.75': 85, '1': 105
+}
+
+
+def get_traffic_volume(app_name, background_pct):
+    return app_volumes[app_name] + back_volume_by_pct[background_pct]
 
 
 def get_nearest_mlab_servers():
@@ -55,8 +72,6 @@ def get_all_mlab_servers():
                 servers_ips['{}_ipv6'.format(server_name)] = '{}/64'.format(ipv6)
             except Exception as e:
                 continue
-    with open("mlab_servers.json", "w") as write_file:
-        json.dump(servers_ips, write_file, indent=4)
     return servers_ips
 
 
@@ -74,40 +89,6 @@ def get_back_clients(servers_names):
     with open(os.path.join(BACKGROUND_REPLAY_DIR, 'clients_info.json'), 'r') as f:
         clients_info = json.load(f)
         return [backReplay.RemoteBackClient(clients_info[s]) for s in servers_names]
-
-
-def reset_tc(interface, ifb='ifb0'):
-    print('Remove current tc stuff')
-    os.system('sudo tc qdisc del dev {} root'.format(interface))
-    os.system('sudo tc qdisc del dev {} handle ffff: ingress'.format(interface))
-    os.system('sudo modprobe -r ifb')
-
-
-def enable_policing(interface, target_srcs, rate, burst, limit=15000, ifb='ifb0'):
-    reset_tc(interface=interface, ifb=ifb)
-
-    # create the ifb interface
-    os.system('sudo modprobe ifb')
-    os.system('sudo ifconfig {} up'.format(ifb))
-    os.system('sudo ifconfig {} txqueuelen 1'.format(ifb))
-
-    # forward inbound traffic to ifb
-    os.system('sudo tc qdisc add dev {} root fq maxrate 10gbit'.format(interface))
-    os.system('sudo tc qdisc add dev {} handle ffff: ingress'.format(interface))
-    for i, src in enumerate(target_srcs):
-        os.system(
-            'sudo tc filter add dev {} parent ffff: protocol all pref 99 u32 '
-            'match ip{} src {} '
-            'action mirred egress redirect index 100 dev {} '
-            'action drop'.format(interface, '6' if is_ipv6(src) else '', src, ifb)
-        )
-
-    os.system('sudo tc qdisc add dev {} root handle 1: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, limit))
-
-    # os.system('sudo tc qdisc add dev {} root handle 1: netem delay 12ms limit {}'.format(ifb, max(limit, 10*1500)))
-    # os.system('sudo tc qdisc add dev {} parent 1:1 handle 10: tbf rate {} burst {} limit {}'.format(ifb, rate, burst, 7500))
-
-    print('Policing is now enabled. Do not forget to --reset_tc when you are done.')
 
 
 def start_background_server(interface, protocol='tcp'):
@@ -128,71 +109,105 @@ def flush_replay_background(back_servers):
         back_server.kill_all_clients()
 
 
-def run_wehe_test(wehe_app):
+def run_wehe_test(wehe_app, use_local_servers=True, results_dir='results'):
     os.chdir(WEHE_CMDLINE_DIR)
-    os.system('java -jar wehe-cmdline.jar -n {} -c -r results/ -l info -u 2'.format(wehe_app))
+    command = ['java', '-jar', 'wehe-cmdline.jar']
+    if use_local_servers: command += ['-s', 'epfl']
+    command += ['-n', wehe_app, '-c', '-r', '{}/'.format(results_dir), '-l', 'info', '-u', '2']
+    subprocess.run(command, timeout=300)
     os.chdir('..')
-    return testDownloader.get_run_test_info('{}/results'.format(WEHE_CMDLINE_DIR))
 
 
-def run_proof_of_concept(wehe_app, wehe_servers, interface, with_policing, rate, burst, limit, back_clients, background_dir='traces'):
-    # enable policing
-    senders = np.concatenate([[b.info['ip'] for b in back_clients], wehe_servers])
-    if with_policing:
-        enable_policing(interface=interface, target_srcs=senders, rate=rate, burst=burst, limit=limit)
+class POCExp:
 
-    # find application protocol
-    app_protocol = 'tcp' if wehe_app in tcp_wehe_apps else 'udp'
+    def __init__(self, wehe_app, wehe_servers, back_clients, eth_interface, result_dir):
+        self.wehe_app = wehe_app
+        self.app_protocol = 'tcp' if wehe_app in tcp_wehe_apps else 'udp'
+        self.wehe_servers = wehe_servers
+        self.back_clients = back_clients
+        self.back_dir = ''
+        self.warmup_time = 10
+        self.eth_interface = eth_interface
+        self.ip = get_ip(self.eth_interface)
+        self.result_dir = result_dir
+        os.makedirs(os.path.join(WEHE_CMDLINE_DIR, self.result_dir), exist_ok=True)
+        self.tc_policers = []
+        self.policing_info = {'policer_type': -1, 'rate:': -1, 'burst': -1, 'limit': -1}
 
-    # reset background server and client
-    flush_replay_background(back_clients)
+    def set_tc_policer(self, tc_policer):
+        rate, burst, limit = tc_policer.get_tbf_params()
+        self.tc_policers = [tc_policer]
+        self.policing_info = {'policer_type': 'common', 'rate': '{}mbit'.format(rate), 'burst': burst, 'limit': limit}
 
-    # start background server
-    back_process = Process(target=start_background_server, kwargs={'interface': interface, 'protocol': app_protocol})
-    back_process.start()
-    print('Background server is running.')
-    print('Do not forget to start the background client replays. Wehe CLI test will start in 1 min.')
+    def set_common_policer(self, rate, burst_period, limit_ratio):
+        burst = TCPolicer.get_burst(rate, burst_period)
+        limit = TCPolicer.get_limit(burst, limit_ratio)
+        senders = np.concatenate([['{}/32'.format(b.info['ip']) for b in self.back_clients], self.wehe_servers])
+        self.tc_policers = [TCPolicer(senders, self.eth_interface, 'ifb0', '{}mbit'.format(rate), burst, limit)]
+        self.policing_info = {'policer_type': 'common', 'rate': '{}mbit'.format(rate), 'burst': burst, 'limit': limit}
 
-    # start background client on the remote machine
-    for back_client in back_clients:
-        back_client.start_replay(background_dir, get_ip(interface), app_protocol)
+    def set_noncommon_policer(self, rate, burst_period, limit_ratio):
+        burst = TCPolicer.get_burst(rate, burst_period)
+        limit = TCPolicer.get_limit(burst, limit_ratio)
+        p1_senders = np.array(['{}/32'.format(self.back_clients[0].info['ip']), self.wehe_servers[0]])
+        p2_senders = np.array(['{}/32'.format(self.back_clients[1].info['ip']), self.wehe_servers[1]])
+        self.tc_policers = [
+            TCPolicer(p1_senders, self.eth_interface, 'ifb0', '{}mbit'.format(rate), burst, limit, traffic_tag=100),
+            TCPolicer(p2_senders, self.eth_interface, 'ifb1', '{}mbit'.format(rate), burst, limit, traffic_tag=200)
+        ]
+        self.policing_info = {'policer_type': 'non-common', 'rate': '{}mbit'.format(rate), 'burst': burst, 'limit': limit}
 
-    # sleep for warmup
-    time.sleep(10)
+    def set_client_back_replay(self, back_dir):
+        self.back_dir = back_dir
 
-    try:
-        # start tcpdump from client side
-        if (app_protocol == 'udp') and enable_policing:
-            ifb_temp_pcap = '{}/results/tcpdump_out.pcap'.format(WEHE_CMDLINE_DIR)
-            ifb_dump = Tcpdump(dump_path=ifb_temp_pcap, interface='ifb0')
-            ifb_dump.start(wehe_ports)
+    def run(self):
+        # start the policer
+        for tc_policer in self.tc_policers:
+            tc_policer.enable_policing()
 
-        # start the wehe cli test
-        test_info = run_wehe_test(wehe_app=wehe_app)
+        # start background server
+        back_process = Process(
+            target=start_background_server, kwargs={'interface': self.eth_interface, 'protocol': self.app_protocol})
+        back_process.start()
+        print('Background server is running.')
+        print('Do not forget to start the background client replays. Wehe CLI test will start in 1 min.')
 
-        # clean everything
-        flush_replay_background(back_clients)
-        reset_tc(interface=interface)
+        # start background client on the remote machine
+        for back_client in self.back_clients:
+            back_client.start_replay(self.back_dir, self.ip, self.app_protocol)
+        time.sleep(self.warmup_time)
 
-        # save the test information
-        test_info['background'] = background_dir
-        test_info['rate'], test_info['burst'], test_info['limit'], test_info['app'] = rate, burst, limit, wehe_app
-        output_dir = '{}/{}'.format(TESTS_INFO_DIR, test_info['date'].replace('/', '-'))
-        os.makedirs(output_dir, exist_ok=True)
-        with open('{}/test_{}_{}_info.json'.format(output_dir, test_info['user_id'], test_info['test_id']), 'w') as f:
-            json.dump(test_info, f)
+        # try to run the wehe app
+        try:
+            # start tcpdump from client side
+            if self.app_protocol == 'udp':
+                for tc_policer in self.tc_policers:
+                    tc_policer.start_tcpdump(os.path.join(WEHE_CMDLINE_DIR, self.result_dir), wehe_ports)
 
-        # stop and copy tcpdump output
-        if (app_protocol == 'udp') and enable_policing:
-            ifb_out_pcap = '{}/dump_{}_{}.pcap'.format(output_dir, test_info['user_id'], test_info['test_id'])
-            ifb_dump.stop()
-            ifb_dump.clean_pcap(ifb_out_pcap, get_ip(interface))
-            print('done cleaning pcap for ifb interface')
+            # start the wehe cli test
+            run_wehe_test(wehe_app=self.wehe_app, use_local_servers=True, results_dir=self.result_dir)
 
-    except Exception as e:
-        flush_replay_background(back_clients)
-        reset_tc(interface=interface)
-        print('failed to record policer configuration because of: ', e)
+            # collect and save info
+            wehe_info = testDownloader.get_run_test_info(os.path.join(WEHE_CMDLINE_DIR, self.result_dir))
+            test_info = {**wehe_info, 'app': self.wehe_app, **self.policing_info, 'background': self.back_dir}
+
+            output_dir = '{}/{}'.format(TESTS_INFO_DIR, test_info['date'].replace('/', '-'))
+            test_file_info = 'test_{}_{}_info.json'.format(test_info['user_id'], test_info['test_id'])
+            os.makedirs(output_dir, exist_ok=True)
+            with open(os.path.join(output_dir, test_file_info), 'w') as f:
+                json.dump(test_info, f)
+
+            # clean everything
+            flush_replay_background(self.back_clients)
+            reset_tc(interface=self.eth_interface)
+
+            # save and clean pcaps
+            for tc_policer in self.tc_policers:
+                tc_policer.stop_tcpdump(output_dir, '{}_{}'.format(test_info['user_id'], test_info['test_id']))
+        except Exception as e:
+            flush_replay_background(self.back_clients)
+            reset_tc(interface=self.eth_interface)
+            print('failed to record policer configuration because of: ', e)
 
 
 if __name__ == '__main__':
@@ -215,52 +230,58 @@ if __name__ == '__main__':
     args = arg_parser.parse_args()
 
     if args.reset_tc:
-        reset_tc(args.interface, args.ifb)
+        reset_tc(args.interface)
     elif args.enable_policing:
-        enable_policing(args.interface, args.target_srcs, args.rate, args.burst, args.limit, args.ifb)
+        TCPolicer(args.target_srcs, args.interface, args.ifb, args.rate, args.burst, args.limit).enable_policing()
     elif args.run & args.auto_config:
         m_rate = float(re.findall("\d+\.?\d+", args.rate)[0])
-        m_burst = int(m_rate * (20 * 1e-3) * 125000)
-        m_limit = int(m_burst * float(args.limit_as_ratio))
-        run_proof_of_concept(args.app, args.interface, True, args.rate, m_burst, m_limit, args.background_traces)
+        poc_exp = POCExp(args.app, get_epfl_servers(), get_back_clients(['icnals17']), args.interface, 'results')
+        poc_exp.set_common_policer(m_rate, (20 * 1e-3), args.limit_as_ratio)
+        poc_exp.set_client_back_replay(args.background_traces)
+        poc_exp.run()
     elif args.run:
-        run_proof_of_concept(args.app, args.interface, True, args.rate, args.burst, args.limit, args.background_traces)
+        poc_exp = POCExp(args.app, get_epfl_servers(), get_back_clients(['icnals17']), args.interface, 'results')
+        poc_exp.set_tc_policer(TCPolicer(args.target_srcs, args.interface, args.ifb, args.rate, args.burst, args.limit))
+        poc_exp.set_client_back_replay(args.background_traces)
+        poc_exp.run()
     elif args.run_exp:
-        # define which servers will execute background
-        m_back_clients = get_back_clients(['icnals17'])
-        m_wehe_servers = get_all_mlab_servers().values() # get_epfl_servers()
+        m_interface = 'eno1'
 
-        # apps and total traffic volume mapping
-        m_app_volumes = {
-            # 'skype': 28.8, 'probe1skype': 27.4, 'probe2skype': 29,
-            # 'whatsapp': 43.4, 'probewhatsapp': 27,
-            'webex': 27, 'probe2webex': 27, 'incprobewebex': 27,
-            # 'nbcsports': 65, 'netflix': 57, 'facebookvideo': 65
-            # 'nbcsports': 34, 'netflix': 32, 'facebookvideo': 37
-        }
-        m_burst_period = 0.035
-        m_rate_ratios, m_limit_ratios = [1.3, 1.5, 2, 2.5], [0.25, 0.5, 1]
-        nb_runs = 0
-        for m_back_dir_idx in np.arange(1, 6):
-            for m_rate_ratio, m_limit_ratio in itertools.product(m_rate_ratios, m_limit_ratios):
-                for m_app in m_app_volumes.keys():
-                    m_rate = int(np.round(m_app_volumes[m_app] / m_rate_ratio))
-                    m_burst = int(m_rate * m_burst_period * 125000)
-                    m_limit = max(int(m_burst * float(m_limit_ratio)), 15000)
-                    nb_runs = nb_runs + 1
-                    print('Run number: ', nb_runs)
+        # the background servers
+        m_back_clients = get_back_clients(['icnals19', 'icnals18'])
+        m_background_dirs = ['skype_back_traces{}'.format(i) for i in np.arange(1, 6)]
+
+        # the policer configurations
+        m_burst_period, m_rate_ratios, m_limit_ratios = 0.035, [1.3, 1.5, 2, 2.5], [0.25, 0.5, 1]
+
+        # the applications
+        # m_tested_apps = {'nbcsports', 'netflix', 'facebookvideo', 'youtube', 'amazon'}
+        m_tested_apps = {'webex', 'probe2webex', 'skype', 'probe2skype'}
+
+        # run the applications
+        for m_back_dir, m_rate_ratio, m_limit_ratio in itertools.product(m_background_dirs, m_rate_ratios, m_limit_ratios):
+            for m_app in m_tested_apps:
+                # clean before start
+                reset_tc(m_interface)
+                flush_replay_background(m_back_clients)
+
+                # get wehe servers
+                m_wehe_servers = get_epfl_servers() # list(get_all_mlab_servers().values())
+
+                try:
+                    poc_exp = POCExp(m_app, m_wehe_servers, m_back_clients, m_interface, 'results_udp_diff_epfl_server_nc')
+
+                    # case non-common policer
+                    m_rate = TCPolicer.get_rate(m_rate_ratio, get_traffic_volume(m_app, '0.25'))
+                    poc_exp.set_noncommon_policer(m_rate / 2, m_burst_period, m_limit_ratio)
                     print(m_app, m_rate_ratio, m_rate, m_limit_ratio)
-                    try:
-                        run_proof_of_concept(
-                            m_app, m_wehe_servers, 'eno1',
-                            True, '{}mbit'.format(m_rate), m_burst, m_limit,
-                            m_back_clients, 'skype_back_traces{}'.format(m_back_dir_idx)
-                        )
-                        print('-------------------------------------')
-                        time.sleep(60)
-                    except Exception as e:
-                        flush_replay_background(m_back_clients)
-                        print('-------------------------------------')
-                        time.sleep(300)
+
+                    poc_exp.set_client_back_replay(m_back_dir)
+                    poc_exp.run()
+                    print('\n-------------------------------------\n')
+                    time.sleep(120)
+                except Exception as e:
+                    print(e, '\n-------------------------------------\n')
+                    time.sleep(300)
 
 
