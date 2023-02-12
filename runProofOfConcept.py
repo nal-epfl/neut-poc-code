@@ -11,10 +11,10 @@ Note:
     the rule of thumb to set the burst = rate(mbit) * rtt(sec) * 125000
 """
 import multiprocessing
+import shutil
 
-import numpy as np
-import argparse, requests, os, socket, time
-import re, json, itertools
+import argparse, socket, time
+import json, itertools
 from multiprocessing import Process
 
 from IOPaths import *
@@ -25,7 +25,7 @@ import test_downloads.downloadTests as testDownloader
 udp_wehe_apps = {'meet', 'teams', 'skype', 'twittervideo', 'webex', 'whatsapp', 'zoom'}
 tcp_wehe_apps = {
     'youtube', 'netflix', 'twitch', 'hulu', 'spotify', 'disneyplus', 'facebookvideo', 'dailymotion', 'deezer',
-    'nbcsports', 'molotovtv', 'mycanal', 'ocs', 'amazon', 'salto', 'sfrplay', 'vimeo'
+    'nbcsports', 'molotovtv', 'mycanal', 'ocs', 'amazon', 'salto', 'sfrplay', 'vimeo', 'longtcp'
 }
 wehe_ports = ['443', '3480', '8801', '9000', '19305', '3478', '49882']
 
@@ -37,7 +37,10 @@ app_volumes = {
     'teams': 2, 'probeteams': 2,
     'skype': 3, 'probe1skype': 3, 'probe2skype': 3, 'incprobeskype': 3,
 
-    'youtube': 25, 'nbcsports': 25, 'netflix': 25, 'facebookvideo': 25, 'amazon': 25
+    # 'youtube': 22, 'disneyplus': 42, 'netflix': 15, 'amazon': 20, 'twitch': 50, 'hulu': 25,
+    # 'facebookvideo': 18, 'nbcsports': 22, 'longtcp': 25
+    'youtube': 22, 'disneyplus': 30, 'netflix': 13, 'amazon': 20, 'twitch': 30, 'hulu': 25,
+    'facebookvideo': 18, 'nbcsports': 22, 'longtcp': 25
 }
 back_volume_by_pct = {
     '0.25': 25, '0.5': 55, '0.75': 85, '1': 105
@@ -75,9 +78,14 @@ def get_all_mlab_servers():
     return servers_ips
 
 
-def get_epfl_servers():
+def get_custom_servers():
     with open(os.path.join(WEHE_CMDLINE_DIR, 'res/servers_ip_list.txt'), 'r') as f:
         return ['{}/32'.format(ip.rstrip('\n')) for ip in f.readlines()]
+
+
+def load_wehe_cmdline_keys(keys_dir):
+    shutil.copy(os.path.join(WEHE_CMDLINE_DIR, 'res', keys_dir, 'main'), os.path.join(WEHE_CMDLINE_DIR, 'res'))
+    shutil.copy(os.path.join(WEHE_CMDLINE_DIR, 'res', keys_dir, 'metadata'), os.path.join(WEHE_CMDLINE_DIR, 'res'))
 
 
 def get_background_server(server_name):
@@ -109,10 +117,10 @@ def flush_replay_background(back_servers):
         back_server.kill_all_clients()
 
 
-def run_wehe_test(wehe_app, use_local_servers=True, results_dir='results'):
+def run_wehe_test(wehe_app, use_custom_servers=True, results_dir='results'):
     os.chdir(WEHE_CMDLINE_DIR)
     command = ['java', '-jar', 'wehe-cmdline.jar']
-    if use_local_servers: command += ['-s', 'epfl']
+    if use_custom_servers: command += ['-s', 'custom']
     command += ['-n', wehe_app, '-c', '-r', '{}/'.format(results_dir), '-l', 'info', '-u', '2']
     subprocess.run(command, timeout=300)
     os.chdir('..')
@@ -121,18 +129,32 @@ def run_wehe_test(wehe_app, use_local_servers=True, results_dir='results'):
 class POCExp:
 
     def __init__(self, wehe_app, wehe_servers, back_clients, eth_interface, result_dir):
+        # app info
         self.wehe_app = wehe_app
         self.app_protocol = 'tcp' if wehe_app in tcp_wehe_apps else 'udp'
+        # the servers runing wehe
         self.wehe_servers = wehe_servers
+        self.use_custom_servers = True
+        # the servers running background traffic
         self.back_clients = back_clients
         self.back_dir = ''
         self.warmup_time = 10
+        # the incoming traffic interface (for policing)
         self.eth_interface = eth_interface
         self.ip = get_ip(self.eth_interface)
-        self.result_dir = result_dir
-        os.makedirs(os.path.join(WEHE_CMDLINE_DIR, self.result_dir), exist_ok=True)
         self.tc_policers = []
         self.policing_info = {'policer_type': -1, 'rate:': -1, 'burst': -1, 'limit': -1}
+        # results directory for wehe-cmdline-tomo
+        self.result_dir = result_dir
+        os.makedirs(os.path.join(WEHE_CMDLINE_DIR, self.result_dir), exist_ok=True)
+
+    def use_mlab(self):
+        self.use_custom_servers = False
+        load_wehe_cmdline_keys('mlab_keys')
+
+    def use_custom_server(self):
+        self.use_custom_servers = True
+        load_wehe_cmdline_keys('custom_keys')
 
     def set_tc_policer(self, tc_policer):
         rate, burst, limit = tc_policer.get_tbf_params()
@@ -160,6 +182,9 @@ class POCExp:
     def set_client_back_replay(self, back_dir):
         self.back_dir = back_dir
 
+    def select_client_back_replay_sample(self, back_dir, sample_ratio):
+        self.back_dir = self.back_clients[0].sample_caida_back_from(back_dir, sample_ratio)
+
     def run(self):
         # start the policer
         for tc_policer in self.tc_policers:
@@ -185,7 +210,7 @@ class POCExp:
                     tc_policer.start_tcpdump(os.path.join(WEHE_CMDLINE_DIR, self.result_dir), wehe_ports)
 
             # start the wehe cli test
-            run_wehe_test(wehe_app=self.wehe_app, use_local_servers=True, results_dir=self.result_dir)
+            run_wehe_test(wehe_app=self.wehe_app, use_custom_servers=self.use_custom_servers, results_dir=self.result_dir)
 
             # collect and save info
             wehe_info = testDownloader.get_run_test_info(os.path.join(WEHE_CMDLINE_DIR, self.result_dir))
@@ -235,12 +260,12 @@ if __name__ == '__main__':
         TCPolicer(args.target_srcs, args.interface, args.ifb, args.rate, args.burst, args.limit).enable_policing()
     elif args.run & args.auto_config:
         m_rate = float(re.findall("\d+\.?\d+", args.rate)[0])
-        poc_exp = POCExp(args.app, get_epfl_servers(), get_back_clients(['icnals17']), args.interface, 'results')
+        poc_exp = POCExp(args.app, get_custom_servers(), get_back_clients(['icnals17']), args.interface, 'results')
         poc_exp.set_common_policer(m_rate, (20 * 1e-3), args.limit_as_ratio)
         poc_exp.set_client_back_replay(args.background_traces)
         poc_exp.run()
     elif args.run:
-        poc_exp = POCExp(args.app, get_epfl_servers(), get_back_clients(['icnals17']), args.interface, 'results')
+        poc_exp = POCExp(args.app, get_custom_servers(), get_back_clients(['icnals17']), args.interface, 'results')
         poc_exp.set_tc_policer(TCPolicer(args.target_srcs, args.interface, args.ifb, args.rate, args.burst, args.limit))
         poc_exp.set_client_back_replay(args.background_traces)
         poc_exp.run()
@@ -248,35 +273,45 @@ if __name__ == '__main__':
         m_interface = 'eno1'
 
         # the background servers
-        m_back_clients = get_back_clients(['icnals19', 'icnals18'])
-        m_background_dirs = ['skype_back_traces{}'.format(i) for i in np.arange(1, 6)]
+        m_back_clients = get_back_clients(['icnals17'])
+        m_background_dirs = ['chicago_2010_back_traffic_5min_control_cbp_2links_v{}'.format(i) for i in np.arange(2, 7)]
+        back_sample_ratio = 0.5
 
         # the policer configurations
         m_burst_period, m_rate_ratios, m_limit_ratios = 0.035, [1.3, 1.5, 2, 2.5], [0.25, 0.5, 1]
 
         # the applications
-        # m_tested_apps = {'nbcsports', 'netflix', 'facebookvideo', 'youtube', 'amazon'}
-        m_tested_apps = {'webex', 'probe2webex', 'skype', 'probe2skype'}
+        m_tested_apps = ['youtube', 'disneyplus', 'netflix', 'amazon', 'twitch']
 
         # run the applications
+        nb_run = 0
         for m_back_dir, m_rate_ratio, m_limit_ratio in itertools.product(m_background_dirs, m_rate_ratios, m_limit_ratios):
             for m_app in m_tested_apps:
+
+                nb_run = nb_run + 1
+                print('Run number: ', nb_run)
+                if nb_run < 111: continue
+
                 # clean before start
                 reset_tc(m_interface)
                 flush_replay_background(m_back_clients)
 
                 # get wehe servers
-                m_wehe_servers = get_epfl_servers() # list(get_all_mlab_servers().values())
+                m_wehe_servers = get_custom_servers()
+                # m_wehe_servers = list(get_all_mlab_servers().values())
 
                 try:
-                    poc_exp = POCExp(m_app, m_wehe_servers, m_back_clients, m_interface, 'results_udp_diff_epfl_server_nc')
+                    results_dir = 'results_sigcomm_tcp'
+                    poc_exp = POCExp(m_app, m_wehe_servers, m_back_clients, m_interface, results_dir)
+                    poc_exp.use_custom_server()
 
-                    # case non-common policer
-                    m_rate = TCPolicer.get_rate(m_rate_ratio, get_traffic_volume(m_app, '0.25'))
-                    poc_exp.set_noncommon_policer(m_rate / 2, m_burst_period, m_limit_ratio)
+                    m_rate = TCPolicer.get_rate(m_rate_ratio, get_traffic_volume(m_app, str(back_sample_ratio)))
                     print(m_app, m_rate_ratio, m_rate, m_limit_ratio)
+                    poc_exp.set_common_policer(m_rate, m_burst_period, m_limit_ratio)
+                    # case non-common policer
+                    # poc_exp.set_noncommon_policer(m_rate / 2, m_burst_period, m_limit_ratio)
 
-                    poc_exp.set_client_back_replay(m_back_dir)
+                    poc_exp.select_client_back_replay_sample(m_back_dir, back_sample_ratio)
                     poc_exp.run()
                     print('\n-------------------------------------\n')
                     time.sleep(120)

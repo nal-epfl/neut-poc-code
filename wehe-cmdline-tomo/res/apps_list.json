@@ -361,6 +361,15 @@
       "category": "VIDEO"
     },
     {
+      "name": "LongTcp",
+      "size": 16,
+      "time": 30,
+      "image": "longtcp",
+      "datafile": "LongTcp_09102023.pcap_client_all.json",
+      "randomdatafile": "LongTcpRandom_09102023.pcap_client_all.json",
+      "category": "VIDEO"
+    },
+    {
       "name": "Zoom",
       "size": 15,
       "time": 61,

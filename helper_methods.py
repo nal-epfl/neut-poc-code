@@ -109,14 +109,12 @@ class Tcpdump(object):
         return self._running
 
     def clean_pcap(self, target_pcap, ip_to_anonymize):
+        interim_pcap = "temp.pcap"
+        os.system('sudo editcap -C 200:10000 {} {}'.format(self.dump_path, interim_pcap))
         os.system('sudo tcprewrite --fixcsum --pnat=[{}]:[{}] --infile={} --outfile={}'.format(
-            ip_to_anonymize, get_anonymizedIP(ip_to_anonymize), self.dump_path, target_pcap
+            ip_to_anonymize, get_anonymizedIP(ip_to_anonymize), interim_pcap, target_pcap
         ))
-        # os.system('sudo chown -R $USER:$USER {}'.format(out_pcap))
-        # remove payload data from pcap file
-        pkts = scapy.all.rdpcap(target_pcap)
-        for pkt in pkts:
-            pkt.load = ''
-        scapy.all.wrpcap(target_pcap, pkts)
-        # remove the input pcap file
+
+        # remove unused pcap file
         os.system('sudo rm {}'.format(self.dump_path))
+        os.system('sudo rm {}'.format(interim_pcap))

@@ -335,7 +335,7 @@ public class Replay {
         throw new RuntimeException(e);
       }
     }
-    else if (server.equals("epfl")) {
+    else if (server.equals("custom")) {
       try {
         String[] ips = Files.readString(Path.of("res/servers_ip_list.txt")).split("\\n");
         for (int i = 0; i < Config.numServers && i < ips.length; i++) {

@@ -19,7 +19,8 @@ public class Main {
           "port1701l", "port5061l", "port6881l", "port8080l", "port8443l",
           "onewaymeet", "onewayteams", "onewayskype", "onewaywebex", "onewaywhatsapp", "onewayzoom",
           "probemeet", "probeteams", "probe1skype", "probewebex", "probewhatsapp", "probezoom",
-          "probe2webex", "incprobewebex", "probe2skype", "incprobeskype", "probe2whatsapp"
+          "probe2webex", "incprobewebex", "probe2skype", "incprobeskype", "probe2whatsapp",
+          "longtcp"
   }; //for -n argument
   private static String logLevel = "UI";
 

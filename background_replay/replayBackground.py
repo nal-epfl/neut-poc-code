@@ -118,6 +118,21 @@ class RemoteBackClient:
     def __init__(self, client_info):
         self.info = client_info
 
+    def sample_caida_back_from(self, back_dir, sample_ratio):
+        sub_back_dir = '{}_sample_{}'.format(back_dir, sample_ratio)
+        command = 'cd {}; rm -r {}; mkdir {}'.format(self.info['path'], sub_back_dir, sub_back_dir)
+        execute_remote_command(self.info['ip'], self.info['user'], self.info['key_path'], command)
+
+        for tag in ['link0', 'link1']:
+            command = (
+                'cd {}; '
+                'python3 replayBackground.py --select_background '
+                '--in_dir=./{}/{}/TCP --out_dir=./{} --sample_ratio={} --prefix={}'.format(
+                    self.info['path'], back_dir, tag, sub_back_dir, sample_ratio, tag
+                ))
+            execute_remote_command(self.info['ip'], self.info['user'], self.info['key_path'], command)
+        return sub_back_dir
+
     def start_replay(self, background_dir, server_ip, protocol):
         command = (
             'ulimit -n 1048576 && '
