@@ -48,10 +48,10 @@ class TCPolicer:
         os.system('sudo tc qdisc add dev {} handle ffff: ingress'.format(self.interface))
         for i, src in enumerate(self.target_srcs):
             os.system(
-                'sudo tc filter add dev {} parent ffff: protocol all pref 99 u32 '
+                'sudo tc filter add dev {} parent ffff: protocol all pref {} u32 '
                 'match ip{} src {} '
                 'action mirred egress redirect index {} dev {} '
-                'action drop'.format(self.interface, '6' if is_ipv6(src) else '', src, self.traffic_tag, self.ifb)
+                'action drop'.format(self.interface, self.traffic_tag, '6' if is_ipv6(src) else '', src, self.traffic_tag, self.ifb)
             )
 
         if added_latency:

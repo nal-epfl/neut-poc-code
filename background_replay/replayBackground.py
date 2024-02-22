@@ -60,7 +60,7 @@ def kill_server():
     try:
         if os.system('sudo lsof -t -i:{} > /dev/null 2>&1'.format(SERVER_PORT)) == 0:
             os.system('sudo kill -9 $(lsof -t -i:{})'.format(SERVER_PORT))
-        time.sleep(10) # wait for tcp to close all the connections
+        time.sleep(30) # wait for tcp to close all the connections
     except Exception as e:
         print('NO RUNNING SERVER')
 
@@ -120,7 +120,7 @@ class RemoteBackClient:
 
     def sample_caida_back_from(self, back_dir, sample_ratio):
         sub_back_dir = '{}_sample_{}'.format(back_dir, sample_ratio)
-        command = 'cd {}; rm -r {}; mkdir {}'.format(self.info['path'], sub_back_dir, sub_back_dir)
+        command = 'cd {}; rm -rf {}; mkdir {}'.format(self.info['path'], sub_back_dir, sub_back_dir)
         execute_remote_command(self.info['ip'], self.info['user'], self.info['key_path'], command)
 
         for tag in ['link0', 'link1']:

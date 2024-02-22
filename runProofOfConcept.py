@@ -31,19 +31,23 @@ wehe_ports = ['443', '3480', '8801', '9000', '19305', '3478', '49882']
 
 app_volumes = {
     'meet': 1, 'probemeet': 1,
-    'webex': 2, 'probewebex': 2, 'probe2webex': 2, 'incprobewebex': 2,
-    'zoom': 2.5, 'probezoom': 2.5,
-    'whatsapp': 4, 'probewhatsapp': 4,
+    'webex': 2, 'probewebex': 2, 'probe2webex': 1, 'incprobewebex': 2,
+    'zoom': 2.5, 'probezoom': 2,
+    'whatsapp': 4, 'probewhatsapp': 2,
     'teams': 2, 'probeteams': 2,
     'skype': 3, 'probe1skype': 3, 'probe2skype': 3, 'incprobeskype': 3,
 
     # 'youtube': 22, 'disneyplus': 42, 'netflix': 15, 'amazon': 20, 'twitch': 50, 'hulu': 25,
     # 'facebookvideo': 18, 'nbcsports': 22, 'longtcp': 25
-    'youtube': 22, 'disneyplus': 30, 'netflix': 13, 'amazon': 20, 'twitch': 30, 'hulu': 25,
+    'youtube': 25, 'disneyplus': 30, 'netflix': 25, 'amazon': 25, 'twitch': 30, 'hulu': 25,
     'facebookvideo': 18, 'nbcsports': 22, 'longtcp': 25
 }
+# back_volume_by_pct = {
+#     '0': 0, '0.25': 25, '0.5': 50, '0.75': 85, '1': 105
+# }
+
 back_volume_by_pct = {
-    '0.25': 25, '0.5': 55, '0.75': 85, '1': 105
+    '0': 0, '0.25': 25, '0.5': 55, '0.75': 85, '1': 105
 }
 
 
@@ -159,16 +163,16 @@ class POCExp:
     def set_tc_policer(self, tc_policer):
         rate, burst, limit = tc_policer.get_tbf_params()
         self.tc_policers = [tc_policer]
-        self.policing_info = {'policer_type': 'common', 'rate': '{}mbit'.format(rate), 'burst': burst, 'limit': limit}
+        self.policing_info = {'policer': {'type': 'common', 'rate': '{}mbit'.format(rate), 'burst': burst, 'limit': limit}}
 
     def set_common_policer(self, rate, burst_period, limit_ratio):
         burst = TCPolicer.get_burst(rate, burst_period)
         limit = TCPolicer.get_limit(burst, limit_ratio)
         senders = np.concatenate([['{}/32'.format(b.info['ip']) for b in self.back_clients], self.wehe_servers])
         self.tc_policers = [TCPolicer(senders, self.eth_interface, 'ifb0', '{}mbit'.format(rate), burst, limit)]
-        self.policing_info = {'policer_type': 'common', 'rate': '{}mbit'.format(rate), 'burst': burst, 'limit': limit}
+        self.policing_info = {'policer': {'type': 'common', 'rate': '{}mbit'.format(rate), 'burst': burst, 'limit': limit}}
 
-    def set_noncommon_policer(self, rate, burst_period, limit_ratio):
+    def set_noncommon_policers(self, rate, burst_period, limit_ratio):
         burst = TCPolicer.get_burst(rate, burst_period)
         limit = TCPolicer.get_limit(burst, limit_ratio)
         p1_senders = np.array(['{}/32'.format(self.back_clients[0].info['ip']), self.wehe_servers[0]])
@@ -177,13 +181,31 @@ class POCExp:
             TCPolicer(p1_senders, self.eth_interface, 'ifb0', '{}mbit'.format(rate), burst, limit, traffic_tag=100),
             TCPolicer(p2_senders, self.eth_interface, 'ifb1', '{}mbit'.format(rate), burst, limit, traffic_tag=200)
         ]
-        self.policing_info = {'policer_type': 'non-common', 'rate': '{}mbit'.format(rate), 'burst': burst, 'limit': limit}
+        self.policing_info = {'policer': {'type': 'non-common', 'rate': '{}mbit'.format(rate), 'burst': burst, 'limit': limit}}
+
+    def set_different_policers(self, rates, burst_period, limit_ratio):
+        p1_senders = np.array(['{}/32'.format(self.back_clients[0].info['ip']), self.wehe_servers[0]])
+        p1_burst = TCPolicer.get_burst(rates[0], burst_period)
+        p1_limit = TCPolicer.get_limit(p1_burst, limit_ratio)
+        p1_policer = TCPolicer(p1_senders, self.eth_interface, 'ifb0', '{}mbit'.format(rates[0]), p1_burst, p1_limit, traffic_tag=100)
+
+        p2_senders = np.array([self.wehe_servers[1]])
+        p2_burst = TCPolicer.get_burst(rates[1], burst_period)
+        p2_limit = TCPolicer.get_limit(p2_burst, limit_ratio)
+        p2_policer = TCPolicer(p2_senders, self.eth_interface, 'ifb1', '{}mbit'.format(rates[1]), p2_burst, p2_limit, traffic_tag=200)
+
+        self.tc_policers = [p2_policer, p1_policer]
+        self.policing_info = {'policer': { 'type': 'different',
+            'rate': ['{}mbit'.format(r) for r in rates], 'burst': [p1_burst, p2_burst], 'limit': [p1_limit, p2_limit],
+        }}
+
 
     def set_client_back_replay(self, back_dir):
         self.back_dir = back_dir
 
     def select_client_back_replay_sample(self, back_dir, sample_ratio):
-        self.back_dir = self.back_clients[0].sample_caida_back_from(back_dir, sample_ratio)
+        for back_client in self.back_clients:
+            self.back_dir = back_client.sample_caida_back_from(back_dir, sample_ratio)
 
     def run(self):
         # start the policer
@@ -252,6 +274,7 @@ if __name__ == '__main__':
     arg_parser.add_argument('--app')
     arg_parser.add_argument('--background_traces', default='traces')
     arg_parser.add_argument('--run_exp', action='store_true')
+    arg_parser.add_argument('--run_control_exp', action='store_true')
     args = arg_parser.parse_args()
 
     if args.reset_tc:
@@ -269,19 +292,58 @@ if __name__ == '__main__':
         poc_exp.set_tc_policer(TCPolicer(args.target_srcs, args.interface, args.ifb, args.rate, args.burst, args.limit))
         poc_exp.set_client_back_replay(args.background_traces)
         poc_exp.run()
+    elif args.run_control_exp:
+        m_interface = 'eno1'
+
+        # the background servers
+        m_back_clients = get_back_clients([])#'icnals18', 'icnals19'])
+        m_background_dirs = ['imc_back_v{}'.format(i) for i in np.arange(1, 2)]
+        back_sample_ratio = 0.5
+
+        m_tested_apps = [
+            #'longtcp', 'youtube', 'disneyplus', 'netflix', 'amazon', 'twitch',
+            #'skype', 'whatsapp', 'teams', 'zoom', 'webex',
+            'probe2skype', 'probewhatsapp', #'probeteams', 'probezoom', 'probe2webex'
+        ]
+
+        for m_back_dir, m_app in itertools.product(m_background_dirs, m_tested_apps):
+            # clean before start
+            reset_tc(m_interface)
+            flush_replay_background(m_back_clients)
+
+            # get wehe servers
+            m_wehe_servers = get_custom_servers()
+
+            try:
+                results_dir = 'results_imc23_control_new'
+                poc_exp = POCExp(m_app, m_wehe_servers, m_back_clients, m_interface, results_dir)
+                poc_exp.use_custom_server()
+                # poc_exp.select_client_back_replay_sample(m_back_dir, back_sample_ratio)
+                poc_exp.run()
+                print('\n-------------------------------------\n')
+                time.sleep(120)
+            except Exception as e:
+                print(e, '\n-------------------------------------\n')
+                time.sleep(300)
+
     elif args.run_exp:
         m_interface = 'eno1'
 
         # the background servers
-        m_back_clients = get_back_clients(['icnals17'])
-        m_background_dirs = ['chicago_2010_back_traffic_5min_control_cbp_2links_v{}'.format(i) for i in np.arange(2, 7)]
+        m_back_clients = get_back_clients(['icnals18', 'icnals19'])
+        m_background_dirs = ['imc_back_v{}'.format(i) for i in np.arange(1, 2)]
         back_sample_ratio = 0.5
 
         # the policer configurations
-        m_burst_period, m_rate_ratios, m_limit_ratios = 0.035, [1.3, 1.5, 2, 2.5], [0.25, 0.5, 1]
+        m_burst_period, m_rate_ratios, m_limit_ratios = 0.03, [1.3, 1.5, 2, 2.5], [0.25, 0.5, 1]
 
         # the applications
-        m_tested_apps = ['youtube', 'disneyplus', 'netflix', 'amazon', 'twitch']
+        m_apps = [
+            'longtcp', 'youtube', 'disneyplus', 'netflix', 'amazon', 'twitch',
+            'skype', 'whatsapp', 'teams', 'zoom', 'webex',
+            'probe2skype', 'probewhatsapp', 'probeteams', 'probezoom', 'probe2webex'
+        ]
+        m_tested_apps = ['longtcp']
 
         # run the applications
         nb_run = 0
@@ -290,7 +352,6 @@ if __name__ == '__main__':
 
                 nb_run = nb_run + 1
                 print('Run number: ', nb_run)
-                if nb_run < 111: continue
 
                 # clean before start
                 reset_tc(m_interface)
@@ -301,15 +362,14 @@ if __name__ == '__main__':
                 # m_wehe_servers = list(get_all_mlab_servers().values())
 
                 try:
-                    results_dir = 'results_sigcomm_tcp'
+                    results_dir = 'results_imc23_common_longtcp'
                     poc_exp = POCExp(m_app, m_wehe_servers, m_back_clients, m_interface, results_dir)
                     poc_exp.use_custom_server()
 
                     m_rate = TCPolicer.get_rate(m_rate_ratio, get_traffic_volume(m_app, str(back_sample_ratio)))
                     print(m_app, m_rate_ratio, m_rate, m_limit_ratio)
                     poc_exp.set_common_policer(m_rate, m_burst_period, m_limit_ratio)
-                    # case non-common policer
-                    # poc_exp.set_noncommon_policer(m_rate / 2, m_burst_period, m_limit_ratio)
+                    # poc_exp.set_noncommon_policers(m_rate / 2, m_burst_period, m_limit_ratio)
 
                     poc_exp.select_client_back_replay_sample(m_back_dir, back_sample_ratio)
                     poc_exp.run()
