@@ -1,8 +1,0 @@
-results/
-out/
-src/META-INF/
-*.iml
-
-# ip info
-res/servers_ip_list.txt
-res/private_server_ip.txt

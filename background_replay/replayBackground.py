@@ -7,9 +7,10 @@ Example:
     python3 replayBackground.py --client --trace_file=traces/link_0_trace_5.csv --server_ip=0.0.0.0 --protocol=tcp
     python3 replayBackground.py --multi_clients --traces_dir=./traces --server_ip=0.0.0.0 --protocol=tcp
     python3 replayBackground.py --select_background --in_dir=./dir1 --out_dir=./traces --sample_ratio=0.3 --prefix=link
+    python3 replayBackground.py --unpack_background --back_dir=./dir1 --link_idx=0
 """
 
-import random, socket, shutil, os, sched, time, argparse, paramiko
+import random, socket, shutil, os, sched, time, argparse, paramiko, glob
 import pandas as pd
 import numpy as np
 from multiprocessing import Process
@@ -61,6 +62,7 @@ def kill_server():
         if os.system('sudo lsof -t -i:{} > /dev/null 2>&1'.format(SERVER_PORT)) == 0:
             os.system('sudo kill -9 $(lsof -t -i:{})'.format(SERVER_PORT))
         time.sleep(10) # wait for tcp to close all the connections
+        os.system(f'sudo lsof -i :{SERVER_PORT} | xargs sudo kill -9')
     except Exception as e:
         print('NO RUNNING SERVER')
 
@@ -120,7 +122,7 @@ class RemoteBackClient:
 
     def sample_caida_back_from(self, back_dir, sample_ratio):
         sub_back_dir = '{}_sample_{}'.format(back_dir, sample_ratio)
-        command = 'cd {}; rm -r {}; mkdir {}'.format(self.info['path'], sub_back_dir, sub_back_dir)
+        command = 'cd {}; rm -r {}; mkdir -p {}'.format(self.info['path'], sub_back_dir, sub_back_dir)
         execute_remote_command(self.info['ip'], self.info['user'], self.info['key_path'], command)
 
         for tag in ['link0', 'link1']:
@@ -140,7 +142,6 @@ class RemoteBackClient:
             'python3 replayBackground.py --multi_clients --traces_dir=./{}{} --server_ip={} --protocol={}'.format(
                 self.info['path'], background_dir, self.info["dirs_suffix"], server_ip, protocol)
         )
-        # print(command)
         execute_remote_command(self.info['ip'], self.info['user'], self.info['key_path'], command)
 
     def kill_all_clients(self):
@@ -152,6 +153,13 @@ def select_background(in_dir, out_dir, prefix, sample_ratio=0.3):
     traces_name = os.listdir(in_dir)
     for trace in random.sample(list(traces_name), int(sample_ratio * len(traces_name))):
         shutil.copyfile('{}/{}'.format(in_dir, trace), '{}/{}_{}'.format(out_dir, prefix, trace))
+        
+
+def unpack_link_traces(back_dir, link_idx):
+    for tar_file in glob.glob(f'{back_dir}/*.tar.gz'):
+        os.system('cd {}; tar -xzvf {}'.format(back_dir, tar_file.split('/')[-1]))
+        for dir_name in glob.glob('{}/*'.format(tar_file.replace('.tar.gz', ''))):
+            if f'link{link_idx}' not in dir_name: os.system(f'rm -r {dir_name}')
 
 
 if __name__ == '__main__':
@@ -162,12 +170,15 @@ if __name__ == '__main__':
     arg_parser.add_argument('--client', action='store_true')
     arg_parser.add_argument('--multi_clients', action='store_true')
     arg_parser.add_argument('--select_background', action='store_true')
+    arg_parser.add_argument('--unpack_background', action='store_true')
     arg_parser.add_argument('--server_ip', default='0.0.0.0')
     arg_parser.add_argument('--trace_file')
     arg_parser.add_argument('--traces_dir')
+    arg_parser.add_argument('--back_dir')
     arg_parser.add_argument('--in_dir')
     arg_parser.add_argument('--out_dir')
     arg_parser.add_argument('--sample_ratio', default=0.3)
+    arg_parser.add_argument('--link_idx')
     arg_parser.add_argument('--prefix', default='')
     arg_parser.add_argument('--kill_server', action='store_true')
     args = arg_parser.parse_args()
@@ -182,3 +193,5 @@ if __name__ == '__main__':
         run_multi_clients(args.traces_dir, args.server_ip, args.protocol)
     elif args.select_background:
         select_background(args.in_dir, args.out_dir, args.prefix, float(args.sample_ratio))
+    elif args.unpack_background:
+        unpack_link_traces(args.back_dir, args.link_idx)

@@ -1,5 +1,6 @@
 # generated files
 *trace*/
+backTraces/
 
 # private info
 clients_info.json

@@ -4,22 +4,6 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 
-ipv4_regex = '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
-ipv6_regex = ('(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:'
-              '[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:'
-              '[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}'
-              '(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)'
-              '|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}'
-              '[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:'
-              '((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))')
-
-
-def is_ipv6(ip):
-    if re.search(ipv6_regex, ip):
-        return True
-    return False
-
-
 def extract_table_from_html(url):
     data = BeautifulSoup(requests.get(url).content, 'html.parser')
 
@@ -47,6 +31,16 @@ def execute_remote_command(client_ip, client_user, key_path, command):
 
 def get_ip(interface):
     return netifaces.ifaddresses(interface)[netifaces.AF_INET][0]['addr']
+
+
+def is_ipv4(ip):
+    try: return ipaddress.ip_network(ip).version == 4
+    except: return False
+
+
+def is_ipv6(ip):
+    try: return ipaddress.ip_network(ip).version == 6
+    except: return False
 
 
 # as present in the Wehe server source code
@@ -110,7 +104,8 @@ class Tcpdump(object):
 
     def clean_pcap(self, target_pcap, ip_to_anonymize):
         interim_pcap = "temp.pcap"
-        os.system('sudo editcap -C 200:10000 {} {}'.format(self.dump_path, interim_pcap))
+        
+        os.system('sudo editcap -C 128:10000 {} {}'.format(self.dump_path, interim_pcap))
         os.system('sudo tcprewrite --fixcsum --pnat=[{}]:[{}] --infile={} --outfile={}'.format(
             ip_to_anonymize, get_anonymizedIP(ip_to_anonymize), interim_pcap, target_pcap
         ))
